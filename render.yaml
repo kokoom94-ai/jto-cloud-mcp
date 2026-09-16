@@ -1,0 +1,17 @@
+# Free trial: ephemeral files/tokens disappear on restart. Production needs a persistent disk.
+services:
+  - type: web
+    name: jto-cloud-mcp
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /health
+    envVars:
+      - key: JTO_ACCESS_PASSWORD
+        generateValue: true
+      - key: JTO_SIGNING_KEY
+        generateValue: true
+      - key: JTO_DATA_DIR
+        value: /data
+      - key: JTO_DOWNLOAD_TTL_SECONDS
+        value: "86400"
