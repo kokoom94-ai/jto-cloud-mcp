@@ -60,32 +60,10 @@ class Documents:
                 structural=validate_hwpx(folder/name)
             if not structural['valid']:raise ValueError('생성 파일 구조 검증 실패')
             validation={'input':check,'structure':structural,'template_sha256':TEMPLATE_HASHES[kind]}
-            title=content.get('title',content.get('plan_title','보고서'))
-            lines=['# '+title,'','검토용 생성 문서. 사실·승인 여부 및 한글 화면 확인은 별도입니다.','']
-            if kind=='onepage':
-                lines+=[content['metadata'],'',*content['summary'],'']
-                for s in content['sections']:lines+=['## '+s['heading'],'',*['- '+b for b in s['bullets']],'']
-                lines+=[content['note']]
-            else:
-                from .contracts import RESULT_SECTIONS
-                from .model import SECTIONS
-                labels=RESULT_SECTIONS if kind=='result_report' else SECTIONS
-                for key,blocks in content['sections'].items():
-                    lines+=['## '+labels[key],'']
-                    for b in blocks:lines+=['- '+b['text'],*['  - '+s for s in b.get('details',[])],*['    - '+s for s in b.get('subdetails',[])],b.get('note','')]
-                lines+=['','## 예산','',json.dumps(content['budget'],ensure_ascii=False,indent=2),'','## '+('향후계획' if kind=='result_report' else '기대효과'),'',*['- '+s for s in content['expected_effects']]]
-            markdown='\n'.join(lines)
-            sources='# 조사 출처\n\n'+json.dumps(content['research'],ensure_ascii=False,indent=2)
-            missing='# 확인·보완 목록\n\n'+'\n'.join('- '+s for s in content['missing_inputs'])
-            files={name:None,'report.md':markdown,'sources.md':sources,'missing-inputs.md':missing,
-                   'validation.json':json.dumps(validation,ensure_ascii=False,indent=2),
-                   'input.json':json.dumps(content,ensure_ascii=False,indent=2),
-                   'review.html':'<!doctype html><html lang="ko"><meta charset="utf-8"><title>내용 검토</title><body><h1>내용 검토용 — 한글 조판 미리보기 아님</h1><pre style="white-space:pre-wrap">'+html.escape(markdown)+'</pre></body></html>'}
-            for n,text in files.items():
-                if text is not None:(folder/n).write_text(text,'utf-8')
-            with zipfile.ZipFile(folder/'bundle.zip','w',zipfile.ZIP_DEFLATED) as archive:
-                for n in files:archive.write(folder/n,n)
-            files['bundle.zip']=None
+            from .integrations import render_pdf
+            validation['auto_hwp']=render_pdf(folder/name)
+            files={name:None}
+            if validation['auto_hwp'].get('rendered'):files['report.pdf']=None
             self.state.put('artifact',artifact,{'owner':owner,'files':list(files),'validation':validation,'expiry':int(time.time())+self.ttl},self.ttl)
             return self.links(artifact,owner)
         except Exception:

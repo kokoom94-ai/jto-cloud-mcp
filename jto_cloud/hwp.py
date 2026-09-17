@@ -1,3 +1,4 @@
+from .editorial import mark,local_notes,end_notes
 """Narrow HWP5 template editor. Keeps original OLE directory and style records."""
 from io import BytesIO
 from pathlib import Path
@@ -116,6 +117,7 @@ def generate_onepage(template, target, content):
         if flags & 2 or not flags & 1:
             raise ValueError('Unexpected HWP compression/encryption flags')
         items = records(zlib.decompress(ole.openstream('BodyText/Section0').read(), -15))
+        docinfo = records(zlib.decompress(ole.openstream('DocInfo').read(), -15))
     # Known, hash-checked original: preserve header/title/summary boxes and page setup.
     replacements = {
         15: (19, content['metadata']),
@@ -128,15 +130,28 @@ def generate_onepage(template, target, content):
     while i < 51:
         if i in replacements:
             end, text = replacements[i]
-            out.extend(paragraph(items[i:end], text, i in (15, 26, 44)))
+            out.extend(paragraph(items[i:end], mark(text,content), i in (15, 26, 44)))
             i = end
         else:
             out.append(items[i]); i += 1
     for n, section in enumerate(content['sections'], 1):
         out.extend(paragraph(items[51:55], f" {n}. {section['heading']}"))
         for bullet in section['bullets']:
-            out.extend(paragraph(items[58:62], ' □ '+bullet))
-    out.extend(paragraph(items[87:91], ' ※ '+content['note'], True))
+            out.extend(paragraph(items[58:62], ' □ '+mark(bullet,content)))
+    # Append a dedicated 12pt note char-shape; all original shapes remain unchanged.
+    shapes=[d for t,l,d in docinfo if t==21]
+    note_shape=bytearray(shapes[5]);struct.pack_into('<i',note_shape,42,1200)
+    shape_id=len(shapes);last=max(i for i,(t,l,d) in enumerate(docinfo) if t==21)
+    docinfo.insert(last+1,(21,docinfo[last][1],bytes(note_shape)))
+    for i,(t,l,d) in enumerate(docinfo):
+        if t==17:
+            d=bytearray(d);struct.pack_into('<I',d,36,shape_id+1);docinfo[i]=(t,l,bytes(d));break
+    proto=[(t,l,struct.pack('<II',0,shape_id) if t==68 else d) for t,l,d in items[87:91]]
+    from .editorial import body_strings
+    notes=[content['note'],*local_notes(' '.join(body_strings('onepage',content)),content),*end_notes('onepage',content)]
+    for i,note in enumerate(notes):out.extend(paragraph(proto,' * '+note,i==len(notes)-1))
+    dc=zlib.compressobj(9,zlib.DEFLATED,-15)
+    docinfo_bytes=dc.compress(encode_records(docinfo))+dc.flush()
     # All cached paragraph positions refer to the blank form.
     cleaned = []
     for tag, level, raw in out:
@@ -154,7 +169,7 @@ def generate_onepage(template, target, content):
     # A valid blank PNG replaces the misleading original-form thumbnail.
     import base64
     blank = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=')
-    result = rewrite_ole(template, {'BodyText/Section0':body, 'PrvText':preview.encode('utf-16le'), 'PrvImage':blank})
+    result = rewrite_ole(template, {'DocInfo':docinfo_bytes,'BodyText/Section0':body, 'PrvText':preview.encode('utf-16le'), 'PrvImage':blank})
     Path(target).write_bytes(result)
     with olefile.OleFileIO(BytesIO(result)) as ole:
         check = records(zlib.decompress(ole.openstream('BodyText/Section0').read(), -15))

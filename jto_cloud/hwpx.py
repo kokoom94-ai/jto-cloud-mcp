@@ -7,6 +7,7 @@ from zipfile import ZipFile, ZIP_STORED, BadZipFile
 from io import BytesIO
 import re
 
+from .editorial import mark, local_notes, end_notes
 from .model import SECTIONS, ValidationError, validate_plan, korean_money
 
 TEMPLATE_HASH = "457f02138b3d470f15557248b636893b21dab442aa60f72706225e4182f6ce3a"
@@ -142,10 +143,12 @@ def fill_section(data, plan, total, kind='business_plan'):
     labels = RESULT_SECTIONS if result else SECTIONS
     starts = (33,39,44,62,80) if result else (31,41,50,69,91,112)
     ends = (37,43,48,66,84) if result else (38,48,54,76,98,116)
+    evidence_prototype = None
     for (key, label), start, end in zip(labels.items(), starts, ends):
         set_paragraph(paragraphs[start], "□ " + label)
         main, detail, subdetail = paragraphs[start + 1:start + 4]
         note = next(p for p in paragraphs[start + 1:end + 1] if paragraph_text(p).lstrip().startswith('*'))
+        if evidence_prototype is None:evidence_prototype=note.cloneNode(True)
         controls = descendants(main, 'hp:ctrl')
         for control in controls:
             if not children(control, 'hp:newNum'):
@@ -153,14 +156,15 @@ def fill_section(data, plan, total, kind='business_plan'):
             control.parentNode.removeChild(control)
         parent = main.parentNode
         for block in plan["sections"][key]:
+            evidence=local_notes(" ".join([block["text"],*block.get("details",[]),*block.get("subdetails",[])]),plan)
             for prototype, line, indent in [(main, "  ○ " + block["text"], True)] + [
                 (detail, "    - " + x, True) for x in block.get("details", [])
             ] + [
                 (subdetail, "     ‧ " + x, True) for x in block.get("subdetails", [])
-            ] + ([(note, "     * " + block["note"], False)] if block.get("note") else []):
+            ] + ([(note, "     * " + block["note"], False)] if block.get("note") else []) + [(note,"     * "+n,False) for n in evidence]:
                 p = prototype.cloneNode(True)
                 p.setAttribute("id", "0")
-                set_paragraph(p, line, indent)
+                set_paragraph(p, mark(line,plan) if prototype is not note else line, indent)
                 if controls:
                     for control in controls:
                         children(p, 'hp:run')[0].appendChild(control)
@@ -175,7 +179,7 @@ def fill_section(data, plan, total, kind='business_plan'):
     set_paragraph(paragraphs[b+1], "  ○ 예산과목: " + plan["budget"]["account"])
     set_paragraph(paragraphs[b+2], "  ○ 집행방법: " + plan["budget"]["payment_method"])
     set_paragraph(paragraphs[b+3], "  ○ 세부내역")
-    repeat_paragraphs(paragraphs[117 if result else 149], ["  ○ " + s for s in plan["expected_effects"]])
+    repeat_paragraphs(paragraphs[117 if result else 149], ["  ○ " + mark(s,plan) for s in plan["expected_effects"]])
     if result:
         set_paragraph(paragraphs[114], ' ※ 집행액·성과는 제공된 증빙 기준이며 미확인 항목은 별도 보완 필요')
     keys = ('outcomes','issues','followup') if result else ('previous_results','analysis','implementation','schedule')
@@ -215,6 +219,13 @@ def fill_section(data, plan, total, kind='business_plan'):
     set_paragraph(total_p, '[미확인]' if plan['budget'].get('status') == 'unknown' else f"{total:,}")
     table.setAttribute("rowCnt", str(count + 2))
     children(table, "hp:sz")[0].setAttribute("height", str(2331 + 2614 + sum(row_heights)))
+    # Keep source and verification notes inside the report using the supplied 12pt style.
+    evidence=end_notes(kind,plan)
+    for effect in plan['expected_effects']:evidence.extend(local_notes(effect,plan))
+    for line in evidence:
+        p=evidence_prototype.cloneNode(True);p.setAttribute('id','0')
+        set_paragraph(p,'     * '+line)
+        doc.documentElement.appendChild(p)
     # Cached positions refer to the blank form, so ask the native renderer to reflow.
     for cache in descendants(doc, "hp:linesegarray"):
         cache.parentNode.removeChild(cache)

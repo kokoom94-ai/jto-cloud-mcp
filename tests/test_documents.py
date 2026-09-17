@@ -29,7 +29,7 @@ def test_generate_original_formats(service,kind):
     value=sample(kind)
     assert validate_document(kind,value)['valid']
     result=service.generate(kind,value,'alice')
-    assert len(result['files'])==8
+    assert [f['name'] for f in result['files']]==['report.'+('hwp' if kind=='onepage' else 'hwpx')]
     ext='hwp' if kind=='onepage' else 'hwpx'
     folder=service.root/result['artifact_id'];p=folder/('report.'+ext)
     if ext=='hwpx':
@@ -45,13 +45,14 @@ def test_generate_original_formats(service,kind):
                 if name.startswith('BinData/'):assert original.read(name)==out.read(name)
     else:
         with olefile.OleFileIO(p) as out,olefile.OleFileIO(ROOT/'onepage.hwp') as original:
-            assert out.openstream('DocInfo').read()==original.openstream('DocInfo').read()
+            assert len(records(zlib.decompress(out.openstream('DocInfo').read(),-15)))==len(records(zlib.decompress(original.openstream('DocInfo').read(),-15)))+1
             assert out.openstream('FileHeader').read()==original.openstream('FileHeader').read()
             rs=records(zlib.decompress(out.openstream('BodyText/Section0').read(),-15))
             text=''.join(d.decode('utf-16le') for t,l,d in rs if t==67)
             assert value['title'] in text and '글상자 테두리선' not in text
             assert '편집여백' not in text
-    with zipfile.ZipFile(folder/'bundle.zip') as bundle:assert bundle.testzip() is None
+    assert not (folder/'sources.md').exists()
+    assert '검사 범위*' in text and '확인 필요*' in text
 
 
 def test_boundaries(service):

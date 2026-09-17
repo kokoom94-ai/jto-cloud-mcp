@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jto-cloud-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "Hosted MCP for three supplied JTO report templates and signed downloads"
 requires-python = ">=3.12"
-dependencies = ["mcp==1.30.0", "uvicorn==0.53.0", "olefile==0.47", "jsonschema==4.26.0", "tzdata>=2025.1"]
+dependencies = ["mcp==1.30.0", "uvicorn==0.53.0", "olefile==0.47", "jsonschema==4.26.0", "tzdata>=2025.1", "httpx==0.28.1", "pypdf>=6,<7"]
 
 [project.optional-dependencies]
 test = ["pytest==9.1.1", "httpx==0.28.1"]

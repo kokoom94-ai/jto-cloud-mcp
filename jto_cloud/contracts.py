@@ -30,6 +30,13 @@ SCHEMAS['onepage'] = obj({
     'missing_inputs':deepcopy(PLAN_SCHEMA['properties']['missing_inputs']),
 })
 
+# Evidence is embedded in the original form, never a separate employee deliverable.
+ANNOTATION = obj({'anchor':string(80),'note':string(600),
+                  'source_ids':array(string(30),10),'verification':string(600)}, ['anchor','note'])
+for schema in SCHEMAS.values():
+    schema['properties']['annotations']={'type':'array','items':ANNOTATION,'maxItems':30}
+    schema['properties']['annotations']['description']='본문 해당 단어 뒤 * 표시 및 중고딕 12pt 주석. 출처 ID와 실제 수행한 검증·미검증 사항 포함.'
+
 
 def validate_document(kind, value):
     from jsonschema import Draft202012Validator, FormatChecker
@@ -69,6 +76,20 @@ def validate_document(kind, value):
         for text in strings(value.get('sections',{})):
             for ref in re.findall(r'\[(S\d+)\]',text):
                 if ref not in known:errors.append(f'출처 {ref}가 sources에 없습니다.')
+    if not errors:
+        from .editorial import style_errors,body_strings,end_notes,local_notes
+        errors.extend(style_errors(kind,value))
+        body=' '.join(body_strings(kind,value))
+        ids=[s['id'] for s in value['research']['sources']]
+        if len(ids)!=len(set(ids)):errors.append('중복 출처 ID 사용 불가')
+        for a in value.get('annotations',[]):
+            if a['anchor'] not in body:errors.append('주석 대상 단어가 본문에 없음: '+a['anchor'])
+            if any(i not in ids for i in a.get('source_ids',[])):errors.append('주석의 출처 ID가 sources에 없음')
+        if kind=='onepage':
+            notes=end_notes(kind,value)+local_notes(body,value)
+            lines=sum(1+sum(math.ceil(len(b)/28) for b in x['bullets']) for x in value['sections'])
+            note_lines=sum(max(1,math.ceil(len(n)/52)) for n in notes)+math.ceil(len(value['note'])/52)
+            if lines+note_lines>28:errors.append('1PAGE 본문과 12pt 주석의 합계 분량 초과. 근거를 삭제하지 말고 본문을 요약하거나 상세 보고서로 작성 필요')
     return {'valid':not errors,'errors':errors,'warnings':['내용·형식 검사는 사실 검증이나 한글 화면 검증을 대체하지 않습니다.'], 'budget_total':total,'facts_verified':False}
 
 
