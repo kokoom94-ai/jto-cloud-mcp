@@ -74,7 +74,8 @@ def render_pdf(document):
         if not count:raise ValueError('empty pdf')
         return {'rendered':True,'engine':'auto-hwp','pages':count,'visual_verified':False,
                 'note':'독립 엔진·대체 글꼴 PDF임. 한글 원본 조판 검증 아님'}
-    except (OSError,ValueError,subprocess.TimeoutExpired):
+    except Exception:
+        # Optional renderer must not discard a valid original-format report.
         target.unlink(missing_ok=True)
         return {'rendered':False,'reason':'auto-hwp 변환 실패 또는 시간 초과','visual_verified':False}
     finally:_render_lock.release()

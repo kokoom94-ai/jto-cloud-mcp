@@ -81,6 +81,8 @@ def validate_document(kind, value):
         errors.extend(style_errors(kind,value))
         body=' '.join(body_strings(kind,value))
         ids=[s['id'] for s in value['research']['sources']]
+        from .editorial import REF
+        if any(ref not in ids for ref in REF.findall(body)):errors.append('본문 인용 출처 ID가 sources에 없음')
         if len(ids)!=len(set(ids)):errors.append('중복 출처 ID 사용 불가')
         for a in value.get('annotations',[]):
             if a['anchor'] not in body:errors.append('주석 대상 단어가 본문에 없음: '+a['anchor'])

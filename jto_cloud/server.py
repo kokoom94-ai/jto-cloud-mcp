@@ -68,16 +68,18 @@ def create_app(data_dir=None,base_url=None,password=None,signing_key=None,auth_m
         return status()
 
     @mcp.tool(annotations=read)
-    def jto_check_korean(text:str)->dict:
+    async def jto_check_korean(text:str)->dict:
         """Hunspell 한국어 사전으로 의심 표기를 조회합니다. 고유명사·음슴체는 문맥 검토하며 자동 수정하지 않습니다."""
         from .integrations import spellcheck
-        return spellcheck(text)
+        if not state.allow('spellcheck',60,60):raise ValueError('맞춤법 검사 요청 한도 초과')
+        return await asyncio.to_thread(spellcheck,text)
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True,openWorldHint=True))
-    def jto_verify_reference(doi:str,expected_title:str='')->dict:
+    async def jto_verify_reference(doi:str,expected_title:str='')->dict:
         """Crossref에서 DOI 실존·제목을 조회합니다. 논문 본문·인용 쪽수·주장의 사실 검증은 별도입니다."""
         from .integrations import verify_doi
-        return verify_doi(doi,expected_title)
+        if not state.allow('reference',60,60):raise ValueError('서지 조회 요청 한도 초과')
+        return await asyncio.to_thread(verify_doi,doi,expected_title)
 
     @mcp.tool(annotations=read)
     def jto_template_info()->dict:
