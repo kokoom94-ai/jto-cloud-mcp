@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import re
+import html
 from urllib.parse import urlparse,parse_qs
 import pytest
 from starlette.testclient import TestClient
@@ -23,8 +24,12 @@ def connect(client):
     assert page.status_code==200,page.text
     csrf=re.search('name="csrf" value="([^"]+)"',page.text).group(1)
     granted=client.post(consent_url,data={'csrf':csrf,'password':PASSWORD},follow_redirects=False,headers={'Origin':'https://server.example'})
-    assert granted.status_code==303,granted.text
-    query=parse_qs(urlparse(granted.headers['location']).query)
+    assert granted.status_code==200,granted.text
+    assert "form-action 'self'" in granted.headers['content-security-policy']
+    callback=html.unescape(re.search('id="return-to-ai" href="([^"]+)"',granted.text).group(1))
+    assert callback.startswith('https://client.example/callback?')
+    assert PASSWORD not in granted.text
+    query=parse_qs(urlparse(callback).query)
     assert query['state']==['test-state']
     data={'grant_type':'authorization_code','code':query['code'][0],'client_id':cid,'redirect_uri':'https://client.example/callback','code_verifier':verifier,'resource':'https://server.example/mcp'}
     token=client.post('/token',data=data)

@@ -58,7 +58,14 @@ class Provider:
                 expires_at=time.time()+120,code_challenge=params.code_challenge,redirect_uri=params.redirect_uri,
                 redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,resource=self.origin+'/mcp',subject=secrets.token_hex(24))
             self.state.put('code',key(code.code),code.model_dump(mode='json'),120)
-            return RedirectResponse(construct_redirect_uri(str(params.redirect_uri),code=code.code,state=params.state),303,headers=headers)
+            # A cross-origin redirect directly after POST is blocked by Chromium's
+            # form-action 'self'. Finish the POST here, then navigate from a new
+            # document. The password can only ever be submitted to this origin.
+            callback=html.escape(construct_redirect_uri(str(params.redirect_uri),code=code.code,state=params.state),quote=True)
+            return HTMLResponse(f'''<!doctype html><html lang="ko"><meta charset="utf-8">
+            <meta http-equiv="refresh" content="0;url={callback}"><title>JTO 연결 완료</title>
+            <h1>인증이 완료됐습니다</h1><p>AI 앱으로 돌아가는 중입니다.</p>
+            <p><a id="return-to-ai" href="{callback}">AI 앱으로 돌아가기</a></p></html>''',headers=headers)
         csrf=secrets.token_urlsafe(32)
         text=f'''<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>JTO 문서 연결</title>
         <style>body{{max-width:520px;margin:70px auto;padding:24px;font-family:sans-serif;line-height:1.7}}input,button{{padding:14px;font-size:16px;width:100%;box-sizing:border-box;margin:10px 0}}button{{background:#115e59;color:white;border:0}}</style>
