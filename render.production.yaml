@@ -15,8 +15,8 @@ services:
       mountPath: /data
       sizeGB: 1
     envVars:
-      - key: JTO_ACCESS_PASSWORD
-        generateValue: true
+      - key: JTO_AUTH_MODE
+        value: public
       - key: JTO_SIGNING_KEY
         generateValue: true
       - key: JTO_DATA_DIR

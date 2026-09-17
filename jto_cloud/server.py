@@ -5,6 +5,8 @@ import html
 import json
 import mimetypes
 import os
+import secrets
+import hashlib
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Literal
@@ -28,7 +30,7 @@ INSTRUCTIONS='''JTO 공식 제공 양식으로 한국어 문서를 작성합니�
 Kind=Literal['business_plan','result_report','onepage']
 
 
-def create_app(data_dir=None,base_url=None,password=None,signing_key=None):
+def create_app(data_dir=None,base_url=None,password=None,signing_key=None,auth_mode=None):
     base=(base_url or os.getenv('JTO_PUBLIC_BASE_URL') or os.getenv('RENDER_EXTERNAL_URL') or '').rstrip('/')
     password=password or os.getenv('JTO_ACCESS_PASSWORD','')
     signing_key=signing_key or os.getenv('JTO_SIGNING_KEY','')
@@ -37,16 +39,19 @@ def create_app(data_dir=None,base_url=None,password=None,signing_key=None):
         raise ValueError('JTO_PUBLIC_BASE_URL must be an origin without a path')
     if parsed.scheme!='https' and not (parsed.scheme=='http' and parsed.hostname in ('localhost','127.0.0.1','::1')):
         raise ValueError('Public service requires HTTPS')
-    if len(password)<16 or len(signing_key)<32:raise ValueError('Set JTO_ACCESS_PASSWORD (16+ chars) and JTO_SIGNING_KEY (32+ chars)')
+    auth_mode=auth_mode or os.getenv('JTO_AUTH_MODE','public')
+    if auth_mode not in ('public','oauth'):raise ValueError('JTO_AUTH_MODE must be public or oauth')
+    public=auth_mode=='public'
+    if len(signing_key)<32 or (not public and len(password)<16):raise ValueError('Set signing key (32+ chars); OAuth also requires password (16+ chars)')
     data_dir=Path(data_dir or os.getenv('JTO_DATA_DIR','./data'))
     state=State(data_dir/'state.sqlite3')
-    provider=Provider(state,base,password)
+    provider=None if public else Provider(state,base,password)
     documents=Documents(data_dir,state,base,signing_key,int(os.getenv('JTO_DOWNLOAD_TTL_SECONDS','86400')))
     if not all(t['available'] for t in template_info()):raise ValueError('Bundled template integrity check failed')
     mcp=FastMCP('JTO Cloud Documents',instructions=INSTRUCTIONS,host='0.0.0.0',json_response=True,stateless_http=True,
         auth_server_provider=provider,
         auth=AuthSettings(issuer_url=base,resource_server_url=base+'/mcp',validate_token_resource=True,
-            required_scopes=['documents'],client_registration_options=ClientRegistrationOptions(enabled=True,valid_scopes=['documents'],default_scopes=['documents']),revocation_options=RevocationOptions(enabled=True)),
+            required_scopes=['documents'],client_registration_options=ClientRegistrationOptions(enabled=True,valid_scopes=['documents'],default_scopes=['documents']),revocation_options=RevocationOptions(enabled=True)) if not public else None,
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=True,allowed_hosts=[parsed.netloc],allowed_origins=[base]))
     read=ToolAnnotations(readOnlyHint=True,destructiveHint=False,openWorldHint=False)
     write=ToolAnnotations(readOnlyHint=False,destructiveHint=False,idempotentHint=False,openWorldHint=False)
@@ -58,7 +63,7 @@ def create_app(data_dir=None,base_url=None,password=None,signing_key=None):
     @mcp.tool(annotations=read)
     def jto_template_info()->dict:
         """내장 사업계획 HWPX·결과보고 HWPX·1PAGE HWP 양식과 원본 해시를 조회합니다."""
-        return {'templates':template_info(),'delivery':'HTTPS download links; no user PC installation','visual_verification':'Not included in core engine'}
+        return {'templates':template_info(),'authentication':auth_mode,'delivery':'HTTPS download links; no user PC installation','visual_verification':'Not included in core engine'}
 
     @mcp.tool(annotations=read)
     def jto_start_document(request:str,template:Kind|None=None)->dict:
@@ -95,21 +100,29 @@ def create_app(data_dir=None,base_url=None,password=None,signing_key=None):
     @mcp.tool(annotations=write)
     async def jto_generate_document(template:Kind,content:dict)->CallToolResult:
         """내장 원본 양식으로 문서를 생성·검증하고 HTTPS 다운로드 링크를 반환합니다. 결과 파일을 반드시 사용자에게 전달하세요."""
-        subject=owner()
-        if not state.allow('generate:'+subject,20,3600):raise ValueError('시간당 생성 한도를 초과했습니다.')
+        retrieval_key=secrets.token_urlsafe(32) if public else None
+        subject=hashlib.sha256(retrieval_key.encode()).hexdigest() if public else owner()
+        if not state.allow('generate:public' if public else 'generate:'+subject,100 if public else 20,3600):raise ValueError('시간당 생성 한도를 초과했습니다. 잠시 후 다시 시도하세요.')
         result=await asyncio.to_thread(documents.generate,template,content,subject)
+        if public:result['retrieval_key']=retrieval_key
         return result_links(result)
 
     @mcp.tool(annotations=read)
-    def jto_get_download(artifact_id:str)->CallToolResult:
-        """같은 연결에서 생성한 유효기간 내 문서의 다운로드 링크를 다시 조회합니다."""
-        return result_links(documents.links(artifact_id,owner()))
+    def jto_get_download(artifact_id:str,retrieval_key:str|None=None)->CallToolResult:
+        """유효기간 내 링크를 재조회합니다. 공개 모드에서는 생성 결과의 retrieval_key를 함께 전달하세요. 사용자 로그인 암호가 아닙니다."""
+        if public:
+            if not retrieval_key or not 32<=len(retrieval_key)<=128:raise ValueError('생성 결과의 retrieval_key가 필요합니다.')
+            subject=hashlib.sha256(retrieval_key.encode()).hexdigest()
+        else:subject=owner()
+        return result_links(documents.links(artifact_id,subject))
 
     @mcp.custom_route('/consent',methods=['GET','POST'])
-    async def consent(request):return await provider.consent(request)
+    async def consent(request):
+        if public:return PlainTextResponse('공개 서비스입니다. AI 설정에서 인증 없음으로 연결하세요.',404)
+        return await provider.consent(request)
 
     @mcp.custom_route('/health',methods=['GET'])
-    async def health(request):return JSONResponse({'status':'ok','templates':len(template_info())})
+    async def health(request):return JSONResponse({'status':'ok','templates':len(template_info()),'authentication':auth_mode})
 
     @mcp.custom_route('/download/{artifact}/{filename}',methods=['GET','HEAD'])
     async def download(request):
@@ -125,7 +138,7 @@ def create_app(data_dir=None,base_url=None,password=None,signing_key=None):
         <body style="font-family:sans-serif;max-width:800px;margin:60px auto;padding:24px;line-height:1.8"><h1>JTO 문서 MCP</h1>
         <p>사업계획 · 결과보고 · 1PAGE — 제공받은 제주관광공사 양식을 사용하는 독립 도구입니다.</p>
         <h2>AI 연결 주소</h2><p><code>{html.escape(base)}/mcp</code></p>
-        <p>AI 앱의 맞춤 커넥터 설정에서 주소를 등록하고 연결을 승인하세요. 직원 PC에 프로그램을 설치할 필요가 없습니다.</p>
+        <p>AI 앱의 맞춤 커넥터 설정에서 주소를 등록하세요. {'인증 방식은 <strong>없음(No authentication)</strong>을 선택합니다. 별도 로그인·연결 암호가 없습니다.' if public else 'OAuth 인증을 완료하세요.'} 직원 PC에 프로그램을 설치할 필요가 없습니다.</p>
         <h2>요청 예시</h2><ul><li>2027 중화권 마케팅 사업계획을 작성해줘</li><li>이 실적 자료로 결과보고서를 만들어줘</li><li>이 내용을 1PAGE 보고 자료로 만들어줘</li></ul>
         <p>생성한 문서는 대화의 다운로드 링크로 받습니다. 링크를 가진 사람은 만료 전 파일을 받을 수 있으므로 공유에 주의하세요.</p>
         <h2>저장과 검증</h2><p>문서와 입력 내용은 서버에 임시 저장됩니다. 기본 다운로드 유효기간은 24시간이며 만료 파일은 주기적으로 정리합니다. 생성 내용은 외부 AI API로 다시 전송하지 않습니다. 원본 양식의 글꼴·스타일을 보존하며 한글의 실제 조판 확인은 별도입니다.</p>

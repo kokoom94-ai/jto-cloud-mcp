@@ -46,7 +46,7 @@ def rpc(client,token,method,params=None):
 
 
 def test_oauth_mcp_generation_download_and_refresh(tmp_path):
-    app=create_app(tmp_path,'https://server.example',PASSWORD,'s'*40)
+    app=create_app(tmp_path,'https://server.example',PASSWORD,'s'*40,auth_mode='oauth')
     with TestClient(app,base_url='https://server.example') as client:
         assert client.get('/health').json()['templates']==3
         assert client.get('/.well-known/oauth-authorization-server').status_code==200
@@ -78,4 +78,30 @@ def test_oauth_mcp_generation_download_and_refresh(tmp_path):
 
 def test_fail_closed_configuration(tmp_path):
     with pytest.raises(ValueError):create_app(tmp_path,'http://public.example',PASSWORD,'s'*40)
-    with pytest.raises(ValueError):create_app(tmp_path,'https://public.example','short','s'*40)
+    with pytest.raises(ValueError):create_app(tmp_path,'https://public.example','short','s'*40,auth_mode='oauth')
+
+
+def test_public_without_login_and_private_document_capabilities(tmp_path):
+    app=create_app(tmp_path,'https://server.example',signing_key='s'*40,auth_mode='public')
+    with TestClient(app,base_url='https://server.example') as client:
+        def call(method,params=None):
+            r=client.post('/mcp',json={'jsonrpc':'2.0','id':1,'method':method,'params':params or {}},headers={'Accept':'application/json, text/event-stream','MCP-Protocol-Version':'2025-11-25'})
+            assert r.status_code==200,r.text
+            return r.json()['result']
+        assert client.get('/health').json()['authentication']=='public'
+        assert client.get('/.well-known/oauth-authorization-server').status_code==404
+        call('initialize',{'protocolVersion':'2025-11-25','capabilities':{},'clientInfo':{'name':'public-test','version':'1'}})
+        info=call('tools/call',{'name':'jto_template_info','arguments':{}})
+        assert not info.get('isError')
+        for kind in ('business_plan','result_report','onepage'):
+            result=call('tools/call',{'name':'jto_generate_document','arguments':{'template':kind,'content':sample(kind)}})
+            assert not result.get('isError'),result
+            data=result['structuredContent']
+            r=client.get(data['files'][0]['url']);assert r.status_code==200
+            assert r.content[:2]==(b'\xd0\xcf' if kind=='onepage' else b'PK')
+            assert client.get(data['files'][0]['url'].replace('signature=','signature=bad')).status_code==404
+            for bad in (None,'wrong'*8):
+                denied=call('tools/call',{'name':'jto_get_download','arguments':{'artifact_id':data['artifact_id'],'retrieval_key':bad}})
+                assert denied.get('isError')
+            allowed=call('tools/call',{'name':'jto_get_download','arguments':{'artifact_id':data['artifact_id'],'retrieval_key':data['retrieval_key']}})
+            assert not allowed.get('isError'),allowed
