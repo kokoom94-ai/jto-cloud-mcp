@@ -1,0 +1,25 @@
+# Optional production blueprint. Selecting this file incurs hosting charges.
+# Estimated baseline: $7/month compute + $0.25/month for a 1 GB disk.
+# Taxes and usage above workspace allowances are additional. Verify current pricing.
+# Do not apply alongside an existing service blindly; update its managed Blueprint.
+services:
+  - type: web
+    name: jto-cloud-mcp
+    runtime: docker
+    plan: 0.5c-512mb
+    region: singapore
+    numInstances: 1
+    healthCheckPath: /health
+    disk:
+      name: jto-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: JTO_ACCESS_PASSWORD
+        generateValue: true
+      - key: JTO_SIGNING_KEY
+        generateValue: true
+      - key: JTO_DATA_DIR
+        value: /data
+      - key: JTO_DOWNLOAD_TTL_SECONDS
+        value: "86400"
